@@ -9,7 +9,6 @@ do
   local DEFAULT_ALPHA = 0.9
   local PARTICLE_DENSITY_BAR_MIN_WIDTH = 50
   local PARTICLE_DENSITY_BAR_MIN_HEIGHT = 7
-  local PARTICLE_DENSITY_BAR_MIN_HEIGHT = 7
   local DEFAULT_FRAME_STRATA = "medium"
   local DEFAULT_FRAME_LEVEL = 10
   local DEFAULT_FONT_FLAGS = "none"
@@ -70,6 +69,8 @@ do
   local GetCorpseRecoveryDelay = GetCorpseRecoveryDelay
   local UnitIsDeadOrGhost = UnitIsDeadOrGhost
   local GetRealZoneText = GetRealZoneText
+  local GetSubZoneText = GetSubZoneText
+  local GetZoneText = GetZoneText
   local GetCVar = GetCVar
   local UnitIsPVP = UnitIsPVP
   local GetPVPTimer = GetPVPTimer
@@ -135,12 +136,16 @@ do
   local CR_HIT_RANGED = CR_HIT_RANGED
   local CR_CRIT_RANGED = CR_CRIT_RANGED
   local _
+  local RequestBattlefieldScoreData = RequestBattlefieldScoreData
+  local GetBattlefieldScore = GetBattlefieldScore
+  local GetNumBattlefieldScores = GetNumBattlefieldScores
 
+  local playerName = UnitName("player")
   local RezTimer_Data, bg_statistics = _G.RezTimer_Data, _G.bg_statistics
   local SYSMSG_SPAM_ERROR = GetLocale()=="ruRU" and "Команда не может быть обработана в текущий момент" or "This command cann't be processed now"
   
   local playerGUID = UnitGUID("player")
-  local InDungeon, InRaidDungeon, InBg, InArena, InRaidGroup, spectatorMode, instanceDifficulty, zonePvpType, showAttackPower, showSpellPower, curZone, zoneColor, InCrossZone, isHunter, needShowServerInfo, needShowServerInfo
+  local InBg, InArena, spectatorMode, instanceDifficulty, curZone, zoneColor, needShowServerInfo, realZone, subZone
   
   ns.UNIT_SPELLCAST_SENT, ns.UNIT_SPELLCAST_SUCCEEDED, ns.spellIcons = {}, {}, {}
   ns.statsInfoString, ns.bgInfoString, ns.zoneInfoString = "", "", ""
@@ -158,6 +163,7 @@ do
   local BY_CORPSE, TO_RES_BY_CORPSE, ENEMIES, READY, BG_PTS, MAP
   local TIME, PLWHO, PLSRV, PVPINST, UPTIME, PVPFLAG, REALM
   local ARMOR, PARRY, DODGE, SPELL, INCORRECT_VALUE, MEMORY
+  local HEAL, DAMAGE
   
   function ns.ForceUpdateLocale()
     --local L = GetLocale()=="ruRU" and cfg.force_en_locale and "enUS" or cfg.force_rus_locale and "ruRU" or GetLocale() 
@@ -166,7 +172,7 @@ do
   
     PARTICLES = L=="ruRU" and "Частицы" or "PARTICLES"
     SERV_DELAY = L=="ruRU" and "Серв" or "SERV"
-    GAMES = L=="ruRU" and "Игр" or "GAMES"
+    GAMES = L=="ruRU" and "Сыграно БГ" or "GAMES"
     WINS = L=="ruRU" and "Побед" or "WINS"
     WINRATE = L=="ruRU" and "Винрейт" or "WR"
     ATTACK_POWER = L=="ruRU" and "АП" or "AP"
@@ -196,6 +202,8 @@ do
     SPELL = L=="ruRU" and "Закл" or "SPELL"
     INCORRECT_VALUE = L=="ruRU" and "Некоректное значение" or "Incorrect value"
     MEMORY = L=="ruRU" and "Пам" or "MEM"
+    HEAL = L=="ruRU" and "Прохил" or "HEAL"
+    DAMAGE = L=="ruRU" and "Урон" or "DMG"
   end
   
   ns.ForceUpdateLocale()
@@ -290,7 +298,7 @@ do
     local FRAME_WIDTH, FRAME_HEIGHT = 800, 400
     local ROW_HEIGHT = 20
   
-    local cfgPanel = CreateFrame("frame", ADDON_NAME.."SettingsPanel", InterfaceOptionsFramePanelContainer)
+    local cfgPanel = CreateFrame("frame", ADDON_NAME.."SettingsPanel"--[[, InterfaceOptionsFramePanelContainer]])
     ns.cfgPanel = cfgPanel
     cfgPanel:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
     cfgPanel:SetAllPoints(InterfaceOptionsFramePanelContainer)
@@ -300,7 +308,7 @@ do
     -- scroll
     -- -------------------------
     do
-      local cfgScroll = CreateFrame("ScrollFrame", ADDON_NAME.."SettingsScrollFrame", InterfaceOptionsFramePanelContainer, "UIPanelScrollFrameTemplate")
+      local cfgScroll = CreateFrame("ScrollFrame", ADDON_NAME.."SettingsScrollFrame", --[[InterfaceOptionsFramePanelContainer]]nil, "UIPanelScrollFrameTemplate")
       cfgPanel.scroll = cfgScroll
       cfgScroll:SetScrollChild(cfgPanel)
       --cfgScroll.name = "|cff00ffff" .. Localise({ en = ADDON_NAME, ru = ADDON_NAME })
@@ -776,6 +784,20 @@ do
       },
       
       {
+        key = "showZoneText_GetZoneText",
+        label = { en = "Show zone name from GetZoneText()", ru = "Показывать текст названия зоны из GetZoneText()" },
+        tooltip = { en = "Show zone name from GetZoneText() \nhttps://web.archive.org/web/20100726112636/http://wowprogramming.com/docs/api/GetZoneText", ru = "Показывать текст названия зоны из GetZoneText() \nhttps://web.archive.org/web/20100726112636/http://wowprogramming.com/docs/api/GetZoneText" },
+        default = false
+      },
+      
+      {
+        key = "showSubZoneName",
+        label = { en = "Show sub zone name", ru = "Показывать название сабзоны(подзоны, области зоны) если есть" },
+        tooltip = { en = "Show sub zone name", ru = "Показывать название сабзоны(подзоны, области зоны) если есть" },
+        default = true
+      },
+      
+      {
         key = "showBgInstanceRunTime",
         label = { en = "Show time since current PvP instance (BG/Arena) started", ru = "Показывать время с момента открытия текущего пвп инста (БГ/арены)" },
         tooltip = { en = "Show time elapsed since the current PvP instance (BG/Arena) opened", ru = "Показывать время с момента открытия текущего пвп инста (БГ/арены)" },
@@ -968,6 +990,13 @@ do
         key = "showBattlegroundStats",
         label = { en = "Show battleground stats (BGs played, wins, winrate)", ru = "Показывать статистику поля боя (кол-во игр, победы, винрейт)" },
         tooltip = { en = "Show basic battleground statistics: BGs played, wins, winrate (from achievement stats data)", ru = "Кол-во игр на бг, победы, винрейт (из данных статистики ачив)" },
+        default = true
+      },
+      
+      {
+        key = "showBgDmgOrHeal",
+        label = { en = "Show bg/arena damage/heal", ru = "Показывать урон/прохил на бг/арене (данные из таблицы)" },
+        tooltip = { en = "Show bg/arena damage/heal", ru = "Показывать урон/прохил на бг/арене (данные из таблицы)" },
         default = true
       },
       
@@ -1980,8 +2009,10 @@ do
   end
    
   -- Создаем статус-бар
+  local mainFrame
   do
     local f = CreateFrame("StatusBar", ADDON_NAME.."_ParticleDensityBar_Frame", UIParent)
+    mainFrame = f
     ns.particleDensityFrame = f
     f:SetClampedToScreen(true)
     f:SetSize(PARTICLE_DENSITY_BAR_MIN_WIDTH, PARTICLE_DENSITY_BAR_MIN_HEIGHT)
@@ -2212,13 +2243,25 @@ do
     
     function ns.updateZoneAndRaidInfo()
       local isInstance, InstanceType = IsInInstance()
-      InDungeon, InRaidDungeon, InBg, InArena, InRaidGroup, spectatorMode, instanceDifficulty, zonePvpType, showAttackPower, showSpellPower, InCrossZone, isHunter = nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil
+      InBg, InArena, spectatorMode, instanceDifficulty, f.showAttackPower, f.showSpellPower, f.InCrossZone, f.isHunter, f.isHealer = nil, nil, nil, nil, nil, nil, nil, nil, nil
 
       local _, type, _, _, maxPlayers, playerDifficulty = GetInstanceInfo()
-      zonePvpType = GetZonePVPInfo()
-      curZone = GetRealZoneText()
-      if curZone == nil or curZone == "" then
+      local zonePvpType = GetZonePVPInfo()
+      
+      realZone = GetRealZoneText() or UNKNOWN
+      subZone = GetSubZoneText() or UNKNOWN
+      curZone = GetZoneText() or UNKNOWN
+      
+      if curZone == "" then
         curZone = UNKNOWN
+      end
+      
+      if subZone == "" then
+        subZone = UNKNOWN
+      end
+      
+      if realZone == "" then
+        realZone = UNKNOWN
       end
 
       if zonePvpType=="sanctuary" then zoneColor = f.rgbToHex(0.41, 0.8, 0.94)
@@ -2244,6 +2287,8 @@ do
         end
       end
       
+      local InRaidDungeon, InDungeon
+      
       if isInstance == 1 then
         if InstanceType == "raid" then
           InDungeon, InRaidDungeon = true, true
@@ -2256,8 +2301,8 @@ do
         end
       end
 
-      InRaidGroup = GetRealNumRaidMembers() > 0 or UnitInRaid("player")
-      InCrossZone = InBg or InArena or (UnitIsPVPSanctuary("player") and (curZone=="Кратер Азшары" or curZone=="Ульдуар" or curZone=="Azshara Crater" or curZone=="Ulduar" or InRaidDungeon))
+      local InRaidGroup = GetRealNumRaidMembers() > 0 or UnitInRaid("player")
+      f.InCrossZone = InBg or InArena or (UnitIsPVPSanctuary("player") and (realZone=="Кратер Азшары" or realZone=="Ульдуар" or realZone=="Azshara Crater" or realZone=="Ulduar" or InRaidDungeon))
       --_G.InCrossZone = InCrossZone
       --print("InCrossZone",_G.InCrossZone)
       
@@ -2266,9 +2311,10 @@ do
       end
       
       playerGUID = UnitGUID("player")
-      showSpellPower = f.IsSpellPowerClass() or f.IsHealerClass()
-      showAttackPower = f.IsMeleeClass()
-      isHunter = select(2, UnitClass("player")) == "HUNTER"
+      f.showSpellPower = f.IsSpellPowerClass() or f.IsHealerClass()
+      f.showAttackPower = f.IsMeleeClass()
+      f.isHealer = f.IsHealerClass()
+      f.isHunter = select(2, UnitClass("player")) == "HUNTER"
       
       wipe(ns.UNIT_SPELLCAST_SENT)
       wipe(ns.UNIT_SPELLCAST_SUCCEEDED)
@@ -2331,13 +2377,29 @@ do
       local parts = {
         format("%s:%s|cccf1f1a1%d|r", GAMES, INDENT_SMALL, ns.BgData.games),
         format("%s:%s|cccf1f1a1%d|r", WINS, INDENT_SMALL, ns.BgData.wins),
-        format("%s:%s|ccc%s%d%%|r", WINRATE, INDENT_SMALL, wrColor, f.truncate(wr))
+        format("%s:%s|ccc%s%d%%|r", WINRATE, INDENT_SMALL, wrColor, f.truncate(wr)),
       }
 
       if ns.BgData.rating then
         tinsert(parts, format("%s:%s%d", BG_PTS, INDENT_SMALL, ns.BgData.rating))
       end
-
+      
+      --local name, damageDone, healingDone
+      if InBg then
+        --print("InBG +", playerName)
+        for i = 1, GetNumBattlefieldScores() do
+          local name, _, _, _, _, _, _, _, _, _, damageDone, healingDone = GetBattlefieldScore(i)
+          if name == playerName then
+            local done = f.isHealer and healingDone or damageDone
+            if done > 0 then
+              --print("TechInfo test damageDone/healingDone:", done)
+              tinsert(parts, format("%s:%s|cccf1f1a1%s|r|cfff8f888K|r", f.isHealer and HEAL or DMG, INDENT_SMALL, format("%.0f", done / 1000)))
+            end
+            break
+          end
+        end
+      end
+      
       return tconcat(parts, INDENT_BIG)
     end
     
@@ -2355,7 +2417,7 @@ do
       local attackPowerLabel = ATTACK_POWER
 
       -- 1. Сбор данных (только нужных)
-      if showSpellPower then
+      if f.showSpellPower then
         attackPowerLabel = SPELL_POWER
         -- В 3.3.5 индекс 2 - это Holy. Итерируем остальные школы.
         spdOrAp = GetSpellBonusDamage(2)
@@ -2368,10 +2430,10 @@ do
         end
         haste = GetCombatRating(CR_HASTE_SPELL)
         hit = GetCombatRating(CR_HIT_SPELL)
-      elseif showAttackPower or isHunter then
+      elseif f.showAttackPower or f.isHunter then
         attackPowerLabel = ATTACK_POWER
         local base, pos, neg
-        if isHunter then
+        if f.isHunter then
           base, pos, neg = UnitRangedAttackPower("player")
           crit = GetRangedCritChance()
           haste = GetCombatRating(CR_HASTE_RANGED)
@@ -2389,7 +2451,7 @@ do
 
       -- 3. Прямая вставка статов (без создания промежуточной таблицы statsList)
       if cfg.showAttackPowerOrSpd then
-        local color = (showAttackPower or isHunter) 
+        local color = (f.showAttackPower or f.isHunter) 
           and f.RGBGradient(1 - spdOrAp / 12000) 
           or f.RGBGradient(1 - spdOrAp / 3500)
         AddStat(attackPowerLabel, spdOrAp, color)
@@ -2405,7 +2467,7 @@ do
       end
 
       if cfg.showHaste then
-        local color = (showSpellPower) and f.RGBGradient(1 - haste / 50) or ((haste == 0) and "999999" or "ffffff")
+        local color = (f.showSpellPower) and f.RGBGradient(1 - haste / 50) or ((haste == 0) and "999999" or "ffffff")
         AddStat(HASTE, haste, color)
       end
 
@@ -2456,11 +2518,19 @@ do
         -- end
       -- end
       
-      ns.zoneInfoString = format("%s:%s|ccc%s%s%s|r%s  %s, %s  |cccff0000%s|r  %s", 
+      local showSubzone = cfg.showSubZoneName and subZone~=realZone and subZone~=UNKNOWN
+      local showZoneText = cfg.showZoneText_GetZoneText and realZone~=curZone
+      
+      ns.zoneInfoString = format("%s:%s|ccc%s%s%s%s%s%s%s%s|r%s  %s, %s  |cccff0000%s|r  %s", 
         MAP, 
         INDENT_SMALL, 
         zoneColor, 
-        curZone, 
+        realZone, 
+        (showZoneText or showSubzone) and " (" or "",
+        showZoneText and curZone or "",
+        (showZoneText and showSubzone) and ", " or "",
+        showSubzone and subZone or "",
+        (showZoneText or showSubzone) and ")" or "",
         instanceDifficulty and " (" .. instanceDifficulty .. ")" or "",
         spectatorMode and "  [spectator]" or "", 
         x, 
@@ -2502,6 +2572,7 @@ do
     f:RegisterEvent("CHAT_MSG_SYSTEM")
     f:RegisterEvent("UPDATE_BATTLEFIELD_STATUS")
     f:RegisterEvent("WHO_LIST_UPDATE")
+    f:RegisterEvent("UPDATE_BATTLEFIELD_SCORE")
 
     f:SetScript("OnEvent", function(self, event, ...)
       if event == "UNIT_SPELLCAST_SENT" and not (UnitCastingInfo("player") or UnitChannelInfo("player")) then
@@ -2573,8 +2644,10 @@ do
       elseif event == "PLAYER_DAMAGE_DONE_MODS" then
         ns.UpdateStats()
       elseif event == "UPDATE_BATTLEFIELD_STATUS" then
-        ns.bgInfoString = ns.GetBgInfoText()
-        textFrame.update(true, textFrame)
+        DelayedCall(0.1, function() 
+          ns.bgInfoString = ns.GetBgInfoText()
+          textFrame.update(true, textFrame)
+        end)
       elseif event == "MODIFIER_STATE_CHANGED" then
         local key, state = ...
         if state == 1 then
@@ -2601,7 +2674,9 @@ do
         --DelayedCall(0.1, function() textFrame:SetScript("OnUpdate", function(...) textFrame.update(nil, ...) end) end)
       elseif event == "PLAYER_ENTERING_WORLD" then
         --print(event, IsSpellPowerClass(), IsHealerClass())
+        playerName = UnitName("player")
         textFrame.needWaitServerInfo = nil
+        textFrame.needWaitBgScoreUpdate = nil
         was_SYSMSG_SPAM_ERROR_error = nil
         textFrame.TextUpdating = nil
         ns.activeConnections = nil
@@ -2674,6 +2749,9 @@ do
         end
       elseif event == "WHO_LIST_UPDATE" then
         ns.NumWhoResults = select(2, GetNumWhoResults())
+      elseif event == "UPDATE_BATTLEFIELD_SCORE" then
+        self.needWaitBgScoreUpdate = nil
+        ns.bgInfoString = ns.GetBgInfoText()
       end
     end)
 
@@ -2751,7 +2829,7 @@ do
       end
     end
     
-    textFrame.servInfoTime, textFrame.t, textFrame.SendWhoTime, textFrame.addonMemTime = 0, 0, 0, 0
+    textFrame.servInfoTime, textFrame.t, textFrame.SendWhoTime, textFrame.addonMemTime, textFrame.RequestBattlefieldScoreDataTime = 0, 0, 0, 0, 0
     local finalLines, row = {}, {}
     
     function textFrame.update(force, self, elapsed)
@@ -2763,6 +2841,7 @@ do
       self.servInfoTime = self.servInfoTime + e
       self.SendWhoTime = self.SendWhoTime + e
       self.addonMemTime = self.addonMemTime + e
+      self.RequestBattlefieldScoreDataTime = self.RequestBattlefieldScoreDataTime + e
       
       local cfg = cfg or {}
 
@@ -2786,6 +2865,12 @@ do
       if cfg.showWhoOnline and self.SendWhoTime > 5 and not (WhoFrameEditBox:IsVisible() and WhoFrameEditBox:GetText() ~= "") and not IsShiftKeyDown() then
         self.SendWhoTime = 0
         SendWho("")
+      end
+      
+      if cfg.showBgDmgOrHeal and not self.needWaitBgScoreUpdate and (InBg or InArena) and self.RequestBattlefieldScoreDataTime > 1 then
+        self.needWaitBgScoreUpdate = true
+        self.RequestBattlefieldScoreDataTime = 0
+        RequestBattlefieldScoreData()
       end
 
       -- === ПОДГОТОВКА ДАННЫХ (Только то, что реально нужно сейчас) ===
@@ -3033,7 +3118,7 @@ do
           needShowServerInfo = needShowServerInfo +1
           --print(f.needShowServerInfo,msg)
           
-          if (InCrossZone and needShowServerInfo >= 3) or needShowServerInfo >= 7 then
+          if (mainFrame.InCrossZone and needShowServerInfo >= 3) or needShowServerInfo >= 7 then
             needShowServerInfo = nil
           end
         end
@@ -3116,10 +3201,10 @@ do
     
     local L = ns.L or GetLocale()
     local LOW_LVL_MUTE = L=="ruRU" and "Мут" or "Muted"
-    local DND_ON = L=="ruRU" and "Включено ДНД" or "DND on"
+    local DND_ON = L=="ruRU" and "Недоступно (ДНД)" or "DND"
     local NAME_UNKNOWN = L=="ruRU" and "Имя неизвестно" or "Name unknown"
-    
-    local addonNamesCache, numAddons = {}, 0
+
+    local addonNamesCache = {}
     
     local f = CreateFrame("frame")
     f:SetScript("OnEvent", function(self, event, ...) return self[event](self, ...) end)
@@ -3147,7 +3232,7 @@ do
       ns.responceTime, responceReceivedTime, lastRequestSendTime = nil, 0, nil
       
       wipe(addonNamesCache)
-      numAddons = GetNumAddOns()
+      local numAddons = GetNumAddOns()
 
       for i = 1, numAddons do
         local name = GetAddOnInfo(i)
@@ -3176,6 +3261,10 @@ do
     
     f:SetScript("onupdate", function(s, e)
       s.updateValueTime = s.updateValueTime + e
+      
+      local cfg = cfg or {}
+      
+      if not cfg.showRTT then return end
       
       if s.updateValueTime < (cfg.seconds_rtt_update_interval or SECONDS_RTT_UPDATE_INTERVAL) then return end
       
@@ -3419,6 +3508,7 @@ do
 
     function f.GameMenu_AddRTT()
       local responceTime = ns.responceTime
+      if not responceTime then return end
       local RGBGradient = f.RGBGradient
       --local mouseFocus = GetMouseFocus()
       --if mouseFocus and mouseFocus.GetName and mouseFocus:GetName() == "MainMenuMicroButton" then
@@ -3428,9 +3518,9 @@ do
             local _, _, latency = GetNetStats()
             local _string = format(MAINMENUBAR_LATENCY_LABEL, latency)
             local textRegion = _G[GameTooltip:GetName().."TextLeft"..i]
-            local color = tonumber(ns.responceTime) and RGBGradient(ns.responceTime/150) or "ffffff"
+            local color = tonumber(responceTime) and RGBGradient(responceTime/150) or "ffffff"
             --textRegion:SetText(_string..", RTT: |cff"..color..ns.responceTime.."|r")
-            textRegion:SetText(format("%s, RTT: |cff%s%s|r", _string, color, ns.responceTime))
+            textRegion:SetText(format("%s, RTT: |cff%s%s|r", _string, color, responceTime))
             GameTooltip:Show()
             --print("GameMenu_AddRTT")
             break
